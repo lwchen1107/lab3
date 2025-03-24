@@ -79,6 +79,138 @@ module fir
     
     always @* begin
         /*-------- ap_idle --------*/
+        if (ap_state == AP_IDLE )
+            ap_ctrl[2] = 1;
+        else
+            ap_ctrl[2] = 0;
+            
+        /*------- ap_start --------*/
+        if (ap_state == AP_IDLE && awaddr == 12'd0 
+        && wdata[0] == 1 && tlast_cnt != data_length)
+            ap_ctrl[0] = 1;
+        else
+            ap_ctrl[0] = 0;
+            
+        /*-------- ap_done --------*/
+        if (sm_tvalid && sm_tlast)
+            ap_ctrl[1] = 1;
+        else if (ap_state == AP_DONE)
+            ap_ctrl[1] = 1;
+        else
+            ap_ctrl[1] = 0;
+    
+    end
+    
+    always @* begin
+        case (ap_state)
+            AP_IDLE:
+            begin
+                if (awaddr == 12'd0 && wdata[0] == 1 && tlast_cnt != data_length) begin
+                    next_ap_state = AP_PROC;
+                end
+                else begin
+                    next_ap_state = AP_IDLE;
+                end  
+            end
+            AP_PROC:
+            begin
+                if (sm_tvalid && sm_tlast) begin // finish last Y
+                    next_ap_state = AP_DONE;
+                end
+                else begin
+                    next_ap_state = AP_PROC;
+                end
+            end
+            AP_DONE:
+            begin
+                if (araddr == 12'd0 && arvalid && rvalid) begin
+                    next_ap_state = AP_IDLE;
+                end
+                else begin
+                    next_ap_state = AP_DONE;
+                end
+            end
+            default:module fir 
+#(  parameter pADDR_WIDTH = 12,
+    parameter pDATA_WIDTH = 32,
+    parameter Tape_Num    = 11
+)
+(
+    output  wire                     awready,
+    output  wire                     wready,
+    input   wire                     awvalid,
+    input   wire [(pADDR_WIDTH-1):0] awaddr,
+    input   wire                     wvalid,
+    input   wire [(pDATA_WIDTH-1):0] wdata,
+    output  wire                     arready,
+    input   wire                     rready,
+    input   wire                     arvalid,
+    input   wire [(pADDR_WIDTH-1):0] araddr,
+    output  wire                     rvalid,
+    output  wire [(pDATA_WIDTH-1):0] rdata,    
+    input   wire                     ss_tvalid, 
+    input   wire [(pDATA_WIDTH-1):0] ss_tdata, 
+    input   wire                     ss_tlast, 
+    output  wire                     ss_tready, 
+    input   wire                     sm_tready, 
+    output  wire                     sm_tvalid, 
+    output  wire [(pDATA_WIDTH-1):0] sm_tdata, 
+    output  wire                     sm_tlast, 
+    
+    // bram for tap RAM
+    output  wire [3:0]               tap_WE,
+    output  wire                     tap_EN,
+    output  wire [(pDATA_WIDTH-1):0] tap_Di,
+    output  wire [(pADDR_WIDTH-1):0] tap_A,
+    input   wire [(pDATA_WIDTH-1):0] tap_Do,
+
+    // bram for data RAM
+    output  wire [3:0]               data_WE,
+    output  wire                     data_EN,
+    output  wire [(pDATA_WIDTH-1):0] data_Di,
+    output  wire [(pADDR_WIDTH-1):0] data_A,
+    input   wire [(pDATA_WIDTH-1):0] data_Do,
+
+    input   wire                     axis_clk,
+    input   wire                     axis_rst_n
+);
+
+//----------------------- AXI-Lite -----------------------------
+    reg ARREADY;
+    reg AWREADY;
+    reg WREADY;
+    reg RVALID;
+    
+    // rvalid set by ARVALID, reset by RREADY
+    always @(posedge axis_clk or negedge axis_rst_n) begin
+        if (!axis_rst_n) begin
+            RVALID  <= 0;
+            ARREADY <= 0;
+            AWREADY <= 0;
+            WREADY  <= 0;
+        end else begin
+            RVALID  <= (arvalid | rvalid & ~rready)? 1 : 0;
+            ARREADY <= (arvalid)?                    1 : 0;
+            AWREADY <= (awvalid && wvalid)?          1 : 0;
+            WREADY  <= (awvalid && wvalid)?          1 : 0;
+        end   
+    end
+
+    assign awready = AWREADY;
+    assign arready = ARREADY; 
+    assign wready  = WREADY;
+    assign rvalid  = RVALID;
+    assign rdata   = (araddr[7:0] == 8'd0)? ap_ctrl : tap_Do; // if read 0x00, ap_ctrl
+    
+//-------------- Configuration Register control ---------------
+    reg [2:0]  ap_ctrl;     //bit 0: ap_start, bit 1: ap_done, bit 2: ap_idle
+    reg [1:0]  ap_state;
+    reg [1:0]  next_ap_state;
+    
+    // 0x00: bit 0: ap_start, bit 1: ap_done, bit 2: ap_idle
+    
+    always @* begin
+        /*-------- ap_idle --------*/
         if (ap_state == `AP_IDLE)
             ap_ctrl[2] = 1;
         else
