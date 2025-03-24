@@ -143,17 +143,18 @@ module fir_tb
     end
 
     initial begin
-        axis_rst_n = 0;
+        axis_rst_n = 0;  // active low
         @(posedge axis_clk); @(posedge axis_clk);
-        axis_rst_n = 1;
+        axis_rst_n = 1;  // set
     end
 
+//---------------- Load data input x[n] --------------------
     reg [31:0]  data_length;
     integer Din, golden, input_data, golden_data, m;
     initial begin
         data_length = 0;
-        Din = $fopen("./samples_triangular_wave.dat","r");
-        golden = $fopen("./out_gold.dat","r");
+        Din = $fopen("/home/ubuntu/csf-demo/testpattern/samples_triangular_wave.dat","r");
+        golden = $fopen("/home/ubuntu/csf-demo/testpattern/out_gold.dat","r");
         for(m=0;m<Data_Num;m=m+1) begin
             input_data = $fscanf(Din,"%d", Din_list[m]);
             golden_data = $fscanf(golden,"%d", golden_list[m]);
@@ -164,6 +165,7 @@ module fir_tb
     integer i;
     initial begin
         $display("------------Start simulation-----------");
+        while(axis_rst_n != 1) @(posedge axis_clk);
         ss_tvalid = 0;
         $display("----Start the data input(AXI-Stream)----");
         for(i=0;i<(data_length-1);i=i+1) begin
@@ -173,6 +175,7 @@ module fir_tb
         ss_tlast = 1; ss(Din_list[(Data_Num-1)]);
         $display("------End the data input(AXI-Stream)------");
     end
+//-----------------------------------------------------------
 
     integer k;
     reg error;
@@ -207,7 +210,7 @@ module fir_tb
         $finish;
     end
 
-
+//----------- Fill in coefficient -------------------
     reg signed [31:0] coef[0:10]; // fill in coef 
     initial begin
         coef[0]  =  32'd0;
@@ -222,28 +225,36 @@ module fir_tb
         coef[9]  = -32'd10;
         coef[10] =  32'd0;
     end
+//---------------------------------------------------
 
+//-------------- Load in coefficient ----------------
     reg error_coef;
+    integer l;
     initial begin
+        // initialize
+        awvalid <= 0; wvalid <= 0;
+        arvalid <= 0; rready <= 0;
         error_coef = 0;
         $display("----Start the coefficient input(AXI-lite)----");
-        config_write(12'h10, data_length);
+        config_write(12'h10, data_length);     // data length input
         for(k=0; k< Tape_Num; k=k+1) begin
-            config_write(12'h20+4*k, coef[k]);
+            config_write(12'h80+4*k, coef[k]); // originally write into configuration register, but we need to change the target to BRAM
         end
-        awvalid <= 0; wvalid <= 0;
+        awvalid <= 0; wvalid <= 0;             // finish loading coefficient
         // read-back and check
         $display(" Check Coefficient ...");
-        for(k=0; k < Tape_Num; k=k+1) begin
-            config_read_check(12'h20+4*k, coef[k], 32'hffffffff);
+        for(l=0; l < Tape_Num; l=l+1) begin
+            config_read_check(12'h80+4*l, coef[l], 32'hffffffff);
         end
         arvalid <= 0;
         $display(" Tape programming done ...");
         $display(" Start FIR");
         @(posedge axis_clk) config_write(12'h00, 32'h0000_0001);    // ap_start = 1
+        awvalid <= 0; wvalid <= 0;             // finish loading ap_start;///////////////////////
         $display("----End the coefficient input(AXI-lite)----");
     end
 
+//------------- write into configuration register ---------------
     task config_write;
         input [11:0]    addr;
         input [31:0]    data;
@@ -260,7 +271,7 @@ module fir_tb
     task config_read_check;
         input [11:0]        addr;
         input signed [31:0] exp_data;
-        input [31:0]        mask;
+        input [31:0]        mask; //////////////////////////////////////////////////
         begin
             arvalid <= 0;
             @(posedge axis_clk);
@@ -278,7 +289,8 @@ module fir_tb
     endtask
 
 
-
+//-------------- Stream-in x[n] -----------------
+    // data stream-in
     task ss;
         input  signed [31:0] in1;
         begin
@@ -288,9 +300,11 @@ module fir_tb
             while (!ss_tready) begin
                 @(posedge axis_clk);
             end
+            ss_tvalid <= 0;
         end
     endtask
 
+//-------------- Stream out y[t] ----------------- 
     task sm;
         input  signed [31:0] in2; // golden data
         input         [31:0] pcnt; // pattern count
